@@ -1,4 +1,12 @@
 
+回显json路径
+
+path.html-曲线（无法自定义宽度）
+
+graph.html-可以自定义宽度的曲线
+
+brush.html-画笔刷
+
 ![Demo-brush](./assets/brush-1.jpg)
 
 [three.js英文文档](https://threejs.org/)
