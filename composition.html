@@ -50,20 +50,26 @@
   <script src="./js/plugins/postprocessing/UnrealBloomPass.js"></script>
   <script src="./js/plugins/shaders/LuminosityHighPassShader.js"></script>
   <script src="./js/plugins/shaders/CopyShader.js"></script>
+
   <!-- 添加晕映效果 -->
   <!-- <script src="./js/plugins/shaders/VignetteShader.js"></script> -->
 
   <script>
-    var scene, camera, renderer, controls, axesHelper, bloomComposer, strokeTexture;
+    var scene, camera, renderer, controls, axesHelper, bloomComposer, strokeTexture, circleTexture, lineTexture;
     var width = window.innerWidth; //窗口宽度
     var height = window.innerHeight; //窗口高度
     var resolution_graph = new THREE.Vector2(width, height);
     var resolution_brush = new THREE.Vector2(width, height);
     var resolution_bloom = new THREE.Vector2(width, height);
-    var arr_graph = [], arr_brush = [], arr_bloom = [];
+    var arr_graph = [], arr_brush = [], arr_bloom = []; // 荧光在同一层，导致绘制荧光和线条的先后顺序不能叠加
     var x, y, z, data = [];
-    var lineWidth = 1500, brushWidth = 100;
-
+    var lineWidth = 1500, brushWidth = 100, pointWidth = 900;
+    const params = {
+      exposure: 1,
+      strength: 0.9, // 光晕强度，默认为1
+      threshold: 0.3, // 光晕阈值，值越小，效果越明显
+      radius: 0 // 光晕半径 
+    };
     var url = './js/data.json';
 
     $.ajax({
@@ -71,6 +77,7 @@
       dataType: 'json',
       contentType: 'application/json',
       success: function (res) {
+        console.log(res)
         data = res;
         x = data.position.x
         y = data.position.y
@@ -88,9 +95,10 @@
 
       var k = width / height; //窗口宽高比
       // var s = 200; //三维场景显示范围控制系数，系数越大，显示的范围越大
-      var s = 100; //三维场景显示范围控制系数，系数越大，显示的范围越大
+      var s = 80; //三维场景显示范围控制系数，系数越大，显示的范围越大
       camera = new THREE.OrthographicCamera(-s * k, s * k, s, -s, 1, 2800);
-      camera.position.set(200, 0, 200); // 设置相机位置
+      // camera.position.set(200, 0, 200); // 设置相机位置
+      camera.position.set(-200, 0, -200); // 设置相机位置
       camera.lookAt(scene.position); //设置相机方向(指向的场景对象)
 
       // 透视投影相机设置
@@ -101,9 +109,7 @@
       renderer.setSize(width, height);//设置渲染区域尺寸，本质就是设置输出canvas的尺寸
       renderer.setClearColor(0x211536, 1); //设置背景颜色
       // renderer.setClearColor(0xdedede, 1); //设置背景颜色
-      // renderer.setClearColor(0x3A304E, 1); //设置背景颜色
-      // renderer.setClearColor(0x32224f, 1); //设置背景颜色
-      
+
       renderer.setPixelRatio(window.devicePixelRatio);
       container.appendChild(renderer.domElement); // 插入canvas对象
       renderer.autoClear = false
@@ -116,8 +122,8 @@
 
 
       // 辅助三维坐标系AxesHelper  参数250表示坐标系大小，可以根据场景大小去设置
-      // var axesHelper = new THREE.AxesHelper(250);
-      // scene.add(axesHelper);
+      var axesHelper = new THREE.AxesHelper(250);
+      scene.add(axesHelper);
 
       for (let i = 0, len = data.lines.length; i < len; i++) {
         if (data.lines[i].type === 0) { // 线条
@@ -146,82 +152,116 @@
           createBloom(arr_bloom)
         }
       }
-
-      render()
     }
-
     function createBloom(arr) {
-      var graph = new THREE.Object3D();
-      scene.add(graph);
-      for (let i = 0, len = arr.length; i < len; i++) {
-        if (arr[i].positions.length > 1) {
-          var geometry = new THREE.Geometry(); // 根据arr.length声明几何体对象Geometry
-          for (let j = 0; j < arr[i].positions.length; j++) {
-            geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
+      new THREE.TextureLoader().load('./assets/circle.png', function (texture) {
+        circleTexture = texture;
+        circleTexture.wrapS = circleTexture.wrapT = THREE.RepeatWrapping;
+
+        var graph = new THREE.Object3D();
+        scene.add(graph);
+        for (let i = 0, len = arr.length; i < len; i++) {
+          if (arr[i].positions.length > 1) {
+            var geometry = new THREE.Geometry(); // 根据arr.length声明几何体对象Geometry
+            if (arr[i].positions.length > 2) {
+              for (let j = 0, len = arr[i].positions.length; j < len; j++) {
+                geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
+              }
+              var g = new MeshLine();
+              g.setGeometry(geometry);
+              var material = new MeshLineMaterial({
+                useMap: false,
+                color: format_color(arr[i].color.r, arr[i].color.g, arr[i].color.b),
+                resolution: resolution_bloom,
+                sizeAttenuation: false,
+                lineWidth: Math.floor(arr[i].width * lineWidth)
+              });
+              var mesh = new THREE.Mesh(g.geometry, material);
+              mesh.layers.set(1)
+              // graph.scale.set(arr[i].scale, arr[i].scale, arr[i].scale);
+              graph.add(mesh);
+            } else if (arr[i].positions[0].x === arr[i].positions[1].x
+              && arr[i].positions[0].y === arr[i].positions[1].y
+              && arr[i].positions[0].z === arr[i].positions[1].z) {
+              const geometryBloom = new THREE.BufferGeometry();
+              var vertices = []
+              for (let j = 0, len = arr[i].positions.length; j < len; j++) {
+                vertices.push((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100)
+              }
+              geometryBloom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+              var material = new THREE.PointsMaterial({
+                color: format_color(arr[i].color.r, arr[i].color.g, arr[i].color.b),
+                // map: new THREE.TextureLoader().load("./assets/circle.png"),
+                map: circleTexture,
+                size: Math.floor(arr[i].width * pointWidth),
+                sizeAttenuation: true, alphaTest: 0.5
+              });
+              var mesh = new THREE.Points(geometryBloom, material);
+              mesh.layers.set(1)
+              graph.add(mesh);
+            } else {
+              for (let j = 0, len = arr[i].positions.length; j < len; j++) {
+                geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
+              }
+              var g = new MeshLine();
+              g.setGeometry(geometry);
+              var material = new MeshLineMaterial({
+                useMap: false,
+                color: format_color(arr[i].color.r, arr[i].color.g, arr[i].color.b),
+                resolution: resolution_bloom,
+                sizeAttenuation: false,
+                lineWidth: Math.floor(arr[i].width * lineWidth)
+              });
+              var mesh = new THREE.Mesh(g.geometry, material);
+              mesh.layers.set(1)
+              graph.add(mesh);
+            }
           }
-          var g = new MeshLine();
-          g.setGeometry(geometry);
-          var material = new MeshLineMaterial({
-            useMap: false,
-            color: `rgb(${Math.floor(arr[i].color.r * 255)}, ${Math.floor(arr[i].color.g * 255)}, ${Math.floor(arr[i].color.b * 255)})`,
-            resolution: resolution_bloom,
-            sizeAttenuation: false,
-            lineWidth: Math.floor(arr[i].width * lineWidth)
-          });
-          var mesh = new THREE.Mesh(g.geometry, material);
-          mesh.layers.set(1)
-          // graph.scale.set(arr[i].scale, arr[i].scale, arr[i].scale);
-          graph.add(mesh);
         }
-      }
 
-      // RenderPass 渲染通道会渲染场景，但不会将渲染结果输出到屏幕上
-      const renderScene = new THREE.RenderPass(scene, camera)
+        // RenderPass 渲染通道会渲染场景，但不会将渲染结果输出到屏幕上
+        const renderScene = new THREE.RenderPass(scene, camera)
 
-      // 该通道接受自定义的着色器作为参数，以生成一个高级、自定义的后期处理通道, 产生各种模糊效果和高级滤镜。
-      // CopyShader是为了能将结果输出，普通的通道一般都是不能输出的，要靠CopyShader进行输出
-      const effectCopy = new THREE.ShaderPass(THREE.CopyShader); // 传入了CopyShader着色器，用于拷贝渲染结果
-      // const effectCopy = new THREE.ShaderPass(THREE.VignetteShader);
-      effectCopy.renderToScreen = true; // 设置这个参数的目的是马上将当前的内容输出
-      // THREE.BloomPass(strength, kernelSize, sigma, Resolution)
-      // strength 定义泛光效果的强度，值越高，明亮的区域越明亮，而且渗入较暗区域的也就越多
-      // kernelSize 控制泛光的偏移量
-      // sigma 控制泛光的锐利程度，值越高，泛光越模糊
-      // Resolution 定义泛光的解析图，如果该值太低，结果的方块化就会越严重
-      const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(container.innerWidth, container.innerHeight), 1.5, 0.4, 0.85);
-      // 该通道会产生类似于虚幻引擎的效果，需搭配对应的着色器包使用
-      // const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(container.innerWidth, container.innerHeight), 1.0, 0.5, 0.1);
-      // const params = {
-      //   exposure: 1,
-      //   strength: 1, // 光晕强度，默认为1
-      //   threshold: 0, // 光晕阈值，值越小，效果越明显
-      //   radius: 0 // 光晕半径
-      // };
-      const params = {
-        exposure: 1,
-        strength: 1, // 光晕强度，默认为1
-        threshold: 0.5, // 光晕阈值，值越小，效果越明显
-        radius: 0 // 光晕半径 
-      };
-      // const params = {
-      //   exposure: 1, // 场景的光照强度
-      //   strength: 0.7, // 光晕强度，默认为1
-      //   threshold: 0.6, // 光晕阈值，值越小，效果越明显
-      //   radius: 0 // 光晕半径
-      // };
-      // const bloomPass = new BloomPass(2, 25, 4.0, 256); //BloomPass通道效果
-      bloomPass.threshold = params.threshold;
-      bloomPass.strength = params.strength;
-      bloomPass.radius = params.radius;
+        // 该通道接受自定义的着色器作为参数，以生成一个高级、自定义的后期处理通道, 产生各种模糊效果和高级滤镜。
+        // CopyShader是为了能将结果输出，普通的通道一般都是不能输出的，要靠CopyShader进行输出
+        const effectCopy = new THREE.ShaderPass(THREE.CopyShader); // 传入了CopyShader着色器，用于拷贝渲染结果
+        // const effectCopy = new THREE.ShaderPass(THREE.VignetteShader);
+        effectCopy.renderToScreen = true; // 设置这个参数的目的是马上将当前的内容输出
+        // THREE.BloomPass(strength, kernelSize, sigma, Resolution)
+        // strength 定义泛光效果的强度，值越高，明亮的区域越明亮，而且渗入较暗区域的也就越多
+        // kernelSize 控制泛光的偏移量
+        // sigma 控制泛光的锐利程度，值越高，泛光越模糊
+        // Resolution 定义泛光的解析图，如果该值太低，结果的方块化就会越严重
+        const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(container.innerWidth, container.innerHeight), 1.5, 0.4, 0.85);
+        // 该通道会产生类似于虚幻引擎的效果，需搭配对应的着色器包使用
+        // const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(container.innerWidth, container.innerHeight), 1.0, 0.5, 0.1);
+        // const params = {
+        //   exposure: 1,
+        //   strength: 1, // 光晕强度，默认为1
+        //   threshold: 0, // 光晕阈值，值越小，效果越明显
+        //   radius: 0 // 光晕半径
+        // };
+        // const params = {
+        //   exposure: 1, // 场景的光照强度
+        //   strength: 0.7, // 光晕强度，默认为1
+        //   threshold: 0.6, // 光晕阈值，值越小，效果越明显
+        //   radius: 0 // 光晕半径
+        // };
+        // const bloomPass = new BloomPass(2, 25, 4.0, 256); //BloomPass通道效果
+        bloomPass.threshold = params.threshold;
+        bloomPass.strength = params.strength;
+        bloomPass.radius = params.radius;
 
-      //创建效果组合器对象，可以在该对象上添加后期处理通道，通过配置该对象，使它可以渲染我们的场景，并应用额外的后期处理步骤，在render循环中，使用EffectComposer渲染场景、应用通道，并输出结果。
+        //创建效果组合器对象，可以在该对象上添加后期处理通道，通过配置该对象，使它可以渲染我们的场景，并应用额外的后期处理步骤，在render循环中，使用EffectComposer渲染场景、应用通道，并输出结果。
 
-      bloomComposer.setSize(container.offsetWidth, container.offsetHeight);
-      bloomComposer.addPass(renderScene);
-      bloomComposer.addPass(bloomPass);
-      bloomComposer.addPass(effectCopy);
+        bloomComposer.setSize(container.offsetWidth, container.offsetHeight);
+        bloomComposer.addPass(renderScene);
+        bloomComposer.addPass(bloomPass);
+        bloomComposer.addPass(effectCopy);
 
-      render()
+        render()
+
+      });
     }
 
     function createBrush(arr) {
@@ -230,7 +270,7 @@
       for (let i = 0, len = arr.length; i < len; i++) {
         if (arr[i].positions.length > 1) {
           var geometry = new THREE.Geometry(); // 声明一个几何体对象Geometry
-          for (let j = 0; j < arr[i].positions.length; j++) {
+          for (let j = 0, len = arr[i].positions.length; j < len; j++) {
             geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
           }
           var g = new MeshLine();
@@ -239,14 +279,13 @@
           var material = new MeshLineMaterial({
             useMap: true,
             map: strokeTexture,
-            color: `rgb(${Math.floor(arr[i].color.r * 255)}, ${Math.floor(arr[i].color.g * 255)}, ${Math.floor(arr[i].color.b * 255)})`,
-            // lineWidth: Math.round(data.lines[i].width * brushWidth),
+            color: format_color(arr[i].color.r, arr[i].color.g, arr[i].color.b),
             lineWidth: brushLineWidth,
             resolution: resolution_brush, // 定义泛光效果的精确度，值越低则泛光效果的方块化越严重
             sizeAttenuation: true,
             depthTest: false, // 使用这个属性可以打开或关闭GL_DEPTH_TEST参数，此参数控制是否使用像素深度来计算新像素的值，通常不需要修改
             blending: THREE.NormalBlending, // 融合属性 决定物体上的材质如何与背景融合，一般为THREE.NormalBlending，这种模式下只显示材质的上层
-            transparent: true, // 如果该值设为true，会使用指定的不透明度渲染物体；设为false就不透明，着色更明亮些。如果使用alpha通道纹理，该属性要设为true
+            transparent: true // 如果该值设为true，会使用指定的不透明度渲染物体；设为false就不透明，着色更明亮些。如果使用alpha通道纹理，该属性要设为true
             // repeat: new THREE.Vector2( 1,2 ) // 两条线
           });
           var mesh = new THREE.Mesh(g.geometry, material);
@@ -263,30 +302,69 @@
     }
 
     function createLines(arr) {
-      var graph = new THREE.Object3D();
-      scene.add(graph);
-      for (let i = 0, len = arr.length; i < len; i++) {
-        if (arr[i].positions.length > 1) {
-          var geometry = new THREE.Geometry(); // 根据arr.length声明几何体对象Geometry
-          for (let j = 0; j < arr[i].positions.length; j++) {
-            geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
+      new THREE.TextureLoader().load('./assets/circle.png', function (texture) {
+        lineTexture = texture;
+        lineTexture.wrapS = lineTexture.wrapT = THREE.RepeatWrapping;
+
+        var graph = new THREE.Object3D();
+        scene.add(graph);
+        for (let i = 0, len = arr.length; i < len; i++) {
+          if (arr[i].positions.length > 1) {
+            var geometry = new THREE.Geometry(); // 根据arr.length声明几何体对象Geometry
+            if (arr[i].positions.length > 2) {
+              for (let j = 0, len = arr[i].positions.length; j < len; j++) {
+                geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
+              }
+              var g = new MeshLine();
+              g.setGeometry(geometry);
+              var material = new MeshLineMaterial({
+                useMap: false,
+                color: format_color(arr[i].color.r, arr[i].color.g,arr[i].color.b),
+                resolution: resolution_graph,
+                sizeAttenuation: false,
+                lineWidth: Math.floor(arr[i].width * lineWidth)
+              });
+              var mesh = new THREE.Mesh(g.geometry, material);
+              graph.add(mesh);
+            } else if (arr[i].positions[0].x === arr[i].positions[1].x
+              && arr[i].positions[0].y === arr[i].positions[1].y
+              && arr[i].positions[0].z === arr[i].positions[1].z) {
+              const geometryLine = new THREE.BufferGeometry();
+              var vertices2 = []
+              for (let j = 0, len = arr[i].positions.length; j < len; j++) {
+                vertices2.push((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100)
+              }
+              geometryLine.setAttribute('position', new THREE.Float32BufferAttribute(vertices2, 3));
+              var material = new THREE.PointsMaterial({
+                color: format_color(arr[i].color.r, arr[i].color.g, arr[i].color.b),
+                // map: new THREE.TextureLoader().load("./assets/circle.png"),
+                map: lineTexture,
+                size: Math.floor(arr[i].width * pointWidth),
+                sizeAttenuation: true,
+                alphaTest: 0.5,
+              });
+              var mesh = new THREE.Points(geometryLine, material);
+              graph.add(mesh);
+            } else {
+              for (let j = 0, len = arr[i].positions.length; j < len; j++) {
+                geometry.vertices.push(new THREE.Vector3((arr[i].positions[j].x - x) * 100, (arr[i].positions[j].y - y) * 100, (arr[i].positions[j].z - z) * 100))
+              }
+              var g = new MeshLine();
+              g.setGeometry(geometry);
+              var material = new MeshLineMaterial({
+                useMap: false,
+                color: format_color(arr[i].color.r, arr[i].color.g, arr[i].color.b),
+                resolution: resolution_graph,
+                sizeAttenuation: false,
+                lineWidth: Math.floor(arr[i].width * lineWidth)
+              });
+              var mesh = new THREE.Mesh(g.geometry, material);
+              graph.add(mesh);
+            }
           }
-          var g = new MeshLine();
-          g.setGeometry(geometry);
-          var material = new MeshLineMaterial({
-            useMap: false,
-            color: `rgb(${Math.floor(arr[i].color.r * 255)}, ${Math.floor(arr[i].color.g * 255)}, ${Math.floor(arr[i].color.b * 255)})`,
-            // opacity: arr[i].color.a.toFixed(2),
-            resolution: resolution_graph,
-            sizeAttenuation: false,
-            lineWidth: Math.floor(arr[i].width * lineWidth),
-            // repeat: new THREE.Vector2( 1,2 )
-          });
-          var mesh = new THREE.Mesh(g.geometry, material);
-          // graph.scale.set(arr[i].scale, arr[i].scale, arr[i].scale);
-          graph.add(mesh);
         }
-      }
+        render()
+      })
     }
     // EVENTS
     window.addEventListener('resize', onWindowResize);
@@ -320,6 +398,15 @@
         renderer.render(scene, camera);
       }
     }
+
+    function format_color(r, g, b) {
+      var color_r = Math.floor(r * 255);
+      var color_g = Math.floor(g * 255);
+      var color_b = Math.floor(b * 255);
+      var color_rgb = 'rgb(' + color_r + ',' + color_g + ',' + color_b + ')';
+      return color_rgb;
+    }
+    
 
   </script>
 </body>
