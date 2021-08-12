@@ -1,5 +1,5 @@
 
-回显json路径
+threejs回显json路径
 
 path.html-曲线（无法自定义宽度）
 
@@ -7,7 +7,8 @@ graph.html-可以自定义宽度的曲线
 
 brush.html-画笔刷
 
-composition.html-整合荧光
+composition.html-整合线条，荧光线条，笔刷，文字
+> 字体库转换地址:ttf -> json (https://gero3.github.io/facetype.js/)
 
 ![Demo-brush](./assets/brush-1.jpg)
 
